@@ -1,3 +1,8 @@
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
+
 import streamlit as st
 import pandas as pd
 from wordcloud import WordCloud
@@ -7,148 +12,113 @@ import re
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 import nltk
-from transformers import pipeline
+from transformers import pipeline, AutoModelForSequenceClassification, AutoTokenizer, logging
 import seaborn as sns
+import torch
 
-# Descargar recursos de NLTK
+# Configuración para reducir logs
+logging.set_verbosity_error()
+
+# Configuración inicial
+st.set_page_config(page_title="Análisis de Opiniones", layout="wide")
+st.title("Análisis de Opiniones de Clientes")
+
+# Descargar recursos de NLTK optimizado
 nltk.download('punkt')
 nltk.download('stopwords')
 
-# Configuración inicial
-st.set_page_config(page_title="Análisis de Opiniones de Bases de Maquillaje", layout="wide")
-
-# Título de la aplicación
-st.title("Análisis de Opiniones - Bases de Maquillaje")
-
-# Cargar modelos de Hugging Face
+# Cargar modelos optimizados
 @st.cache_resource
 def load_models():
-    sentiment_analyzer = pipeline("sentiment-analysis", model="finiteautomata/bertweet-base-sentiment-analysis")
-    summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-    return sentiment_analyzer, summarizer
+    try:
+        # Modelo pequeño para análisis de sentimientos
+        model_name = "finiteautomata/bertweet-base-sentiment-analysis"
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            device_map="auto",
+            torch_dtype=torch.float16
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        
+        sentiment_analyzer = pipeline(
+            "sentiment-analysis",
+            model=model,
+            tokenizer=tokenizer,
+            device=0 if torch.cuda.is_available() else -1
+        )
+        
+        # Modelo pequeño para resumen
+        summarizer = pipeline(
+            "summarization",
+            model="sshleifer/distilbart-cnn-12-6",
+            device=0 if torch.cuda.is_available() else -1
+        )
+        
+        return sentiment_analyzer, summarizer
+    except Exception as e:
+        st.error(f"Error cargando modelos: {str(e)}")
+        return None, None
 
 sentiment_analyzer, summarizer = load_models()
 
-# Función para limpiar y tokenizar texto
+# Funciones optimizadas
 def clean_and_tokenize(text):
     text = text.lower()
     text = re.sub(r'[^a-zA-Záéíóúñ\s]', '', text)
     tokens = word_tokenize(text)
     stop_words = set(stopwords.words('spanish'))
-    tokens = [word for word in tokens if word not in stop_words and len(word) > 2]
-    return tokens
+    return [word for word in tokens if word not in stop_words and len(word) > 2]
 
-# Función para analizar sentimientos
 def analyze_sentiment(text):
-    result = sentiment_analyzer(text[:512])
-    label = result[0]['label']
-    if label == 'POS':
-        return "Positivo", result[0]['score']
-    elif label == 'NEG':
-        return "Negativo", result[0]['score']
-    else:
-        return "Neutral", result[0]['score']
+    if sentiment_analyzer is None:
+        return "Error", 0.0
+    try:
+        result = sentiment_analyzer(text[:512])
+        label = result[0]['label']
+        return {"POS": "Positivo", "NEG": "Negativo", "NEU": "Neutral"}.get(label, "Neutral"), result[0]['score']
+    except:
+        return "Error", 0.0
 
-# Función para generar resumen
 def generate_summary(text):
-    summary = summarizer(text[:1024], max_length=130, min_length=30, do_sample=False)
-    return summary[0]['summary_text']
+    if summarizer is None:
+        return "Modelo no disponible"
+    try:
+        return summarizer(text[:1024], max_length=130, min_length=30, do_sample=False)[0]['summary_text']
+    except:
+        return "Error generando resumen"
 
-# Datos de ejemplo
-opinions = [
-    "Un sérum magnífico, deja la piel espectacular con un acabado natural, el tono está muy bien.",
-    "Este producto es maravilloso, minimiza imperfecciones con una sola aplicación al día. 10/10.",
-    "Es la mejor base si buscas una cobertura muy natural. No se nota que traes algo puesto.",
-    "Excelente base buen cubrimiento.",
-    "Mi piel es sensible y este producto es el mejor aliado del día a día, excelente cubrimiento.",
-    "Excelente base buen cubrimiento.",
-    "El empaque es terrible, no la volveré a comprar porque no sirve el envase.",
-    "Sí se siente una piel diferente después de usar el producto.",
-    "Me gusta mucho cómo deja mi piel, es buen producto aunque no me gusta su presentación.",
-    "Me parece buena, pero pienso que huele mucho a alcohol, no sé si es normal.",
-    "Creo que fue el color que no lo supe elegir, no está mal, pero me imaginaba algo más.",
-    "La base ofrece un acabado mate y aterciopelado que deja la piel lisa.",
-    "La base de maquillaje ofrece un acabado muy lindo y natural.",
-    "Muy buen producto, solo que dura poco tiempo, por ahí unas 5 horas.",
-    "Excelente cobertura y precio.",
-    "No es para nada grasosa.",
-    "El producto es mucho más oscuro de lo que aparece en la referencia.",
-    "Pensé me sentaría mejor el número 8, es muy buena pero noto que toca como poner dos veces.",
-    "No me gustó su cobertura.",
-    "La sensación en la piel no me gusta, me arde al aplicarla."
-]
+# Interfaz de usuario optimizada
+def main():
+    st.header("Carga tus opiniones")
+    uploaded_file = st.file_uploader("Sube un archivo CSV", type="csv")
 
-df = pd.DataFrame({'Opinion': opinions})
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file).head(20)  # Limitar a 20 opiniones
+        
+        with st.spinner("Procesando..."):
+            # Análisis básico
+            st.subheader("Análisis Rápido")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Nube de palabras**")
+                tokens = clean_and_tokenize(' '.join(df.iloc[:, 0].astype(str)))
+                wordcloud = WordCloud(width=400, height=200).generate(' '.join(tokens))
+                plt.figure(figsize=(10, 5))
+                plt.imshow(wordcloud)
+                plt.axis('off')
+                st.pyplot(plt)
+            
+            with col2:
+                st.write("**Sentimientos**")
+                df['Sentimiento'] = df.iloc[:, 0].apply(lambda x: analyze_sentiment(x)[0])
+                st.bar_chart(df['Sentimiento'].value_counts())
+        
+        # Análisis detallado bajo demanda
+        if st.checkbox("Mostrar análisis detallado"):
+            with st.spinner("Analizando..."):
+                df['Detalle'] = df.iloc[:, 0].apply(lambda x: analyze_sentiment(x)[0] + f" ({analyze_sentiment(x)[1]:.2f})")
+                st.dataframe(df[[df.columns[0], 'Detalle']])
 
-# Procesamiento inicial
-all_text = ' '.join(df['Opinion'].astype(str))
-tokens = clean_and_tokenize(all_text)
-df['Análisis'] = df['Opinion'].apply(analyze_sentiment)
-df[['Sentimiento', 'Puntaje']] = pd.DataFrame(df['Análisis'].tolist(), index=df.index)
-
-# Interfaz de usuario
-st.header("Visualización de Datos")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("Nube de Palabras")
-    wordcloud = WordCloud(width=800, height=400, background_color='white').generate(' '.join(tokens))
-    plt.figure(figsize=(10, 5))
-    plt.imshow(wordcloud, interpolation='bilinear')
-    plt.axis('off')
-    st.pyplot(plt)
-
-with col2:
-    st.subheader("Palabras Más Frecuentes")
-    word_counts = Counter(tokens)
-    top_words = word_counts.most_common(10)
-    top_words_df = pd.DataFrame(top_words, columns=['Palabra', 'Frecuencia'])
-    plt.figure(figsize=(10, 5))
-    sns.barplot(x='Frecuencia', y='Palabra', data=top_words_df, palette='viridis')
-    st.pyplot(plt)
-
-st.header("Análisis de Sentimientos")
-
-col3, col4 = st.columns(2)
-
-with col3:
-    st.subheader("Distribución de Sentimientos")
-    sentiment_counts = df['Sentimiento'].value_counts()
-    plt.figure(figsize=(8, 6))
-    plt.pie(sentiment_counts, labels=sentiment_counts.index, autopct='%1.1f%%', colors=['#66b3ff','#99ff99','#ffcc99'])
-    plt.title('Distribución de Sentimientos')
-    st.pyplot(plt)
-
-with col4:
-    st.subheader("Opiniones por Sentimiento")
-    st.dataframe(df[['Opinion', 'Sentimiento', 'Puntaje']].sort_values('Puntaje', ascending=False))
-
-st.header("Interacción con los Comentarios")
-
-selected_opinion = st.selectbox("Selecciona una opinión para analizar:", df['Opinion'])
-
-if st.button("Generar Resumen"):
-    summary = generate_summary(selected_opinion)
-    st.write("**Resumen:**", summary)
-
-if st.button("Identificar Temas Principales"):
-    topics = {
-        "Cobertura": ["cobertura", "cubrimiento", "tapar", "imperfecciones"],
-        "Textura": ["textura", "acabado", "aterciopelado", "mate", "natural"],
-        "Duración": ["dura", "horas", "tiempo", "permanece"],
-        "Color": ["color", "tono", "oscuro", "número"],
-        "Piel sensible": ["sensible", "arda", "irrita", "reacción"]
-    }
-    
-    matched_topics = []
-    tokens = clean_and_tokenize(selected_opinion.lower())
-    
-    for topic, keywords in topics.items():
-        if any(keyword in tokens for keyword in keywords):
-            matched_topics.append(topic)
-    
-    if matched_topics:
-        st.write("**Temas identificados:**", ", ".join(matched_topics))
-    else:
-        st.write("No se identificaron temas específicos en esta opinión.")
+if __name__ == "__main__":
+    main()
