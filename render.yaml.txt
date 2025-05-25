@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: analisis-opiniones
+    runtime: python
+    buildCommand: |
+      pip install -r requirements.txt
+      python -m nltk.downloader punkt stopwords -d /opt/render/.cache/nltk_data
+    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.16
+      - key: NLTK_DATA
+        value: /opt/render/.cache/nltk_data
+      - key: TRANSFORMERS_OFFLINE
+        value: 1
+    plan: free
